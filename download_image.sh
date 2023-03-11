@@ -62,7 +62,7 @@ case $1 in
     ;;
     *)
         skip_wget=1
-        mv url ./
+        mv $1 ./
     ;;
 esac
 
