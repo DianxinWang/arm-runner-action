@@ -1,6 +1,7 @@
 #!/bin/bash
 set -uo pipefail
 
+skip_wget=0
 case $1 in
     "raspbian_lite:latest")
         url=https://downloads.raspberrypi.org/raspbian_lite_latest
@@ -54,8 +55,8 @@ case $1 in
         url="$1"
     ;;
     *)
-        echo "Unknown image $1"
-        exit 1
+        skip_wget=1
+        mv url ./
     ;;
 esac
 
@@ -63,7 +64,9 @@ tempdir=${RUNNER_TEMP:-/home/actions/temp}/arm-runner
 rm -rf ${tempdir}
 mkdir -p ${tempdir}
 cd ${tempdir}
-wget --trust-server-names --content-disposition -q ${url}
+if [ $skip_wget -eq 0 ]; then
+    wget --trust-server-names --content-disposition -q ${url}
+fi
 case `echo *` in
     *.zip)
         unzip -u *
