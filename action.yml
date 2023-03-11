@@ -44,6 +44,18 @@ inputs:
     description: 'Use systemd-nspawn instead of chroot'
     required: false
     default: 'no'
+  systemd_nspawn_options:
+    description: 'Options passed to systemd-nspawn, e.g. -E CI=${CI}'
+    required: false
+    default: ''
+  bootpartition:
+    description: 'Partition number for boot (/boot), empty means none'
+    required: false
+    default: '1'
+  rootpartition:
+    description: 'Partition number for root (/)'
+    required: false
+    default: '2'
   shell:
     description: 'Path to shell to run the commands with'
     required: false
@@ -103,14 +115,13 @@ runs:
         esac
         arm_cpu=${cpu%:*}
         aarch64_cpu=${cpu#*:}
-        sudo mv /usr/bin/qemu-arm-static /usr/bin/qemu-arm-static0
-        sudo mv /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64-static0
-        sudo gcc -static ${{ github.action_path }}/qemu-wrapper.c -DQEMU_CPU=${arm_cpu} -O3 -s -o /usr/bin/qemu-arm-static
-        sudo gcc -static ${{ github.action_path }}/qemu-wrapper.c -DQEMU_CPU=${aarch64_cpu} -O3 -s -o /usr/bin/qemu-aarch64-static
-        sudo update-binfmts --disable qemu-arm
-        sudo update-binfmts --disable qemu-aarch64
-        sudo update-binfmts --enable qemu-arm
-        sudo update-binfmts --enable qemu-aarch64
+        sudo gcc -static ${{ github.action_path }}/qemu-wrapper.c -DQEMU_CPU=${arm_cpu} -O3 -s -o /usr/bin/qemu-arm-static0
+        sudo gcc -static ${{ github.action_path }}/qemu-wrapper.c -DQEMU_CPU=${aarch64_cpu} -O3 -s -o /usr/bin/qemu-aarch64-static0
+        sudo update-binfmts --unimport qemu-arm
+        sudo update-binfmts --unimport qemu-aarch64
+        sudo update-binfmts --package arm-runner-action --install arm-runner-action-qemu-arm /usr/bin/qemu-arm-static0 --magic '\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff' --credentials yes --fix-binary yes
+        sudo update-binfmts --package arm-runner-action --install arm-runner-action-qemu-aarch64 /usr/bin/qemu-aarch64-static0 --magic '\x7f\x45\x4c\x46\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff' --credentials yes --fix-binary yes
+
     - name: Download base image
       run: |
         bash ${{ github.action_path }}/download_image.sh ${{ inputs.base_image }}
@@ -118,7 +129,7 @@ runs:
       id: download_image
     - name: Mount and optionally resize image
       run: |
-        sudo bash ${{ github.action_path }}/mount_image.sh ${{ steps.download_image.outputs.image }} ${{ inputs.image_additional_mb }} ${{ inputs.use_systemd_nspawn }}
+        sudo --preserve-env=GITHUB_OUTPUT bash ${{ github.action_path }}/mount_image.sh ${{ steps.download_image.outputs.image }} ${{ inputs.image_additional_mb }} ${{ inputs.use_systemd_nspawn }} ${{ inputs.rootpartition }} ${{ inputs.bootpartition }}
       shell: bash
       id: mount_image
     - name: Mount CPU info
@@ -155,10 +166,16 @@ runs:
             exit_on_fail=''
         ;;
         esac
-        shell=${{ inputs.shell }}
+        shell_with_opts="${{ inputs.shell }}"
+        shell=${shell_with_opts%% *}
+        if [ "${shell}" != "${shell_with_opts}" ]; then
+            shell_opts=${shell_with_opts#* }
+        else
+            shell_opts=""
+        fi
         shell_package=${{ inputs.shell_package }}
         [ -x ${{ steps.mount_image.outputs.mount }}/${shell} ] || \
-        shell_path=$(sudo chroot ${{ steps.mount_image.outputs.mount }} which ${shell}) || \
+        shell_path=$(sudo chroot ${{ steps.mount_image.outputs.mount }} /bin/sh -c "command -v ${shell}") || \
         case ${shell} in
         bash|sh)
             :
@@ -167,7 +184,7 @@ runs:
             sudo chroot ${{ steps.mount_image.outputs.mount }} sudo apt-get install -y ${shell_package:-${shell##*/}}
         ;;
         esac
-        shell_path=${shell_path:-$(sudo chroot ${{ steps.mount_image.outputs.mount }} which ${shell})}
+        shell_path=${shell_path:-$(sudo chroot ${{ steps.mount_image.outputs.mount }} /bin/sh -c "command -v ${shell}")}
         sudo mkdir -p $(dirname ${{ steps.mount_image.outputs.mount }}${repository_path})
         case ${{ inputs.bind_mount_repository }} in
         yes|true)
@@ -187,10 +204,13 @@ runs:
         fi
         mkdir -p ${script_dir}
         script_path=${script_dir}/commands.sh
-        sudo touch ${script_path}
-        sudo chmod o+wx ${script_path}
-        echo "#!${shell_path}" > ${script_path}
-        echo "set -${debug}${exit_on_fail}" >> ${script_path}
+        touch ${script_path}
+        if [ "${debug}${exit_on_fail}" != "" ]; then
+            shell_basename=`basename ${shell_path}`
+            if [ "${shell_basename}" = "sh" -o "${shell_basename}" = "bash" -o "${shell_basename}" = "ksh" -o "${shell_package}" = "ksh" ]; then
+                echo "set -${debug}${exit_on_fail}" >> ${script_path}
+            fi
+        fi
         case "${{ inputs.import_github_env }}" in
         yes|true)
             export | sed -e 's/^declare -x //g;s/^[^=]*$/\0=""/g;s/='\''\(.*\)'\''$/=\1/g' >> ${script_dir}/environment.sh
@@ -208,9 +228,9 @@ runs:
         ARM_RUNNER_INPUT_COMMANDS_EOF
         if [ "${{ inputs.use_systemd_nspawn }}x" != "x" -a "${{ inputs.use_systemd_nspawn }}x" != "nox" ]; then
             sudo apt-get install -y systemd-container
-            sudo systemd-nspawn -q -a --bind=${script_dir}:${chroot_script_dir} -D ${{ steps.mount_image.outputs.mount }} ${shell_path} ${chroot_script_dir}/commands.sh
+            sudo -E systemd-nspawn -q -a --bind=${script_dir}:${chroot_script_dir} -D ${{ steps.mount_image.outputs.mount }} ${{ inputs.systemd_nspawn_options }} ${shell_path} ${shell_opts} ${chroot_script_dir}/commands.sh
         else
-            sudo chroot ${{ steps.mount_image.outputs.mount }} ${chroot_script_dir}/commands.sh
+            sudo -E chroot ${{ steps.mount_image.outputs.mount }} ${shell_path} ${shell_opts} ${chroot_script_dir}/commands.sh
         fi
         rc=$?
         [ -f ${script_dir}/github_env.sh ] && \
@@ -236,11 +256,12 @@ runs:
         fi
       shell: bash
     - name: Unmount CPU info
-      if: ${{ inputs.cpu_info != '' }}
+      if: ${{ always() && inputs.cpu_info != '' }}
       run: |
         sudo umount ${{ steps.mount_image.outputs.mount }}/proc/cpuinfo
       shell: bash
     - name: Cleanup image
+      if: always()
       run: |
         case ${{ inputs.bind_mount_repository }} in
         yes|true)
@@ -252,17 +273,18 @@ runs:
             sudo umount ${{ steps.mount_image.outputs.mount }}${repository_path}
         ;;
         esac
-        sudo bash ${{ github.action_path }}/cleanup_image.sh ${{ steps.mount_image.outputs.loopdev }} ${{ steps.mount_image.outputs.mount }} ${{ steps.download_image.outputs.image }} "${{ inputs.optimize_image }}"
+        sudo bash ${{ github.action_path }}/cleanup_image.sh ${{ steps.mount_image.outputs.loopdev }} ${{ steps.mount_image.outputs.mount }} ${{ steps.download_image.outputs.image }} "${{ inputs.optimize_image }}" "${{ inputs.rootpartition }}"
       shell: bash
     - name: Restore qemu wrapper
+      if: always()
       shell: bash
       run: |
-        sudo mv /usr/bin/qemu-arm-static0 /usr/bin/qemu-arm-static
-        sudo mv /usr/bin/qemu-aarch64-static0 /usr/bin/qemu-aarch64-static
-        sudo update-binfmts --disable qemu-arm
-        sudo update-binfmts --disable qemu-aarch64
-        sudo update-binfmts --enable qemu-arm
-        sudo update-binfmts --enable qemu-aarch64
+        sudo update-binfmts --package arm-runner-action --remove arm-runner-action-qemu-arm /usr/bin/qemu-arm-static0
+        sudo update-binfmts --package arm-runner-action --remove arm-runner-action-qemu-aarch64 /usr/bin/qemu-aarch64-static0
+        sudo rm /usr/bin/qemu-arm-static0
+        sudo rm /usr/bin/qemu-aarch64-static0
+        sudo update-binfmts --import qemu-arm
+        sudo update-binfmts --import qemu-aarch64
 branding:
   icon: 'cpu'
   color: 'purple'

@@ -1,22 +1,29 @@
-name: Test successive invocations
+name: Test import_github_env
 on:
   push:
     branches:
       - 'main'
       - 'releases/**'
+      - 'w45-*'
   pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
+  test_chroot:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - uses: ./ # pguyot/arm-runner-action@HEAD
       with:
         commands: |
-          echo "First invocation"
+          [ -n "${CI}" ] && [ -n "${GITHUB_JOB}" ]
+  test_systemd_nspawn:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
     - uses: ./ # pguyot/arm-runner-action@HEAD
       with:
+        use_systemd_nspawn: true
+        systemd_nspawn_options: -E CI=${CI}
         commands: |
-          echo "Second invocation"
+          [ -n "${CI}" ] && [ -z "${GITHUB_JOB:-}" ]

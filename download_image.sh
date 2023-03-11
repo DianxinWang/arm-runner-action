@@ -27,8 +27,14 @@ case $1 in
     "raspios_lite:2022-01-28")
         url=https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-01-28/2022-01-28-raspios-bullseye-armhf-lite.zip
     ;;
+    "raspios_lite:2022-04-04")
+        url=https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf-lite.img.xz
+    ;;
     "raspios_lite_arm64:2022-01-28")
         url=https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2022-01-28/2022-01-28-raspios-bullseye-arm64-lite.zip
+    ;;
+    "raspios_lite_arm64:2022-04-04")
+        url=https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2022-04-07/2022-04-04-raspios-bullseye-arm64-lite.img.xz
     ;;
     "dietpi:rpi_armv6_bullseye")
         url=https://dietpi.com/downloads/images/DietPi_RPi-ARMv6-Bullseye.7z
@@ -82,9 +88,21 @@ case `echo *` in
     ;;
     *.img)
     ;;
+    *.zip\?*)
+        unzip -u *
+    ;;
+    *.7z\?*)
+        7zr e *
+    ;;
+    *.xz\?*)
+        xz -d *
+    ;;
+    *.gz\?*)
+        gzip -d *
+    ;;
     *)
         echo "Don't know how to uncompress image " *
         exit 1
 esac
 mv "$(ls *.img */*.img 2>/dev/null | head -n 1)" arm-runner.img
-echo "::set-output name=image::${tempdir}/arm-runner.img"
+echo "image=${tempdir}/arm-runner.img" >> "$GITHUB_OUTPUT"

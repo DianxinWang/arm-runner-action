@@ -1,5 +1,12 @@
 name: Test architecture matrix
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches:
+      - 'main'
+      - 'releases/**'
+  pull_request:
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,7 +24,7 @@ jobs:
           cpu: cortex-a53
           base_image: raspios_lite_arm64:latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - uses: ./ # pguyot/arm-runner-action@HEAD
       with:
         base_image: ${{ matrix.base_image }}

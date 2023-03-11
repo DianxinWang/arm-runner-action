@@ -17,42 +17,53 @@ This action works with both 32 bits (arm) and 64 bits (aarch64) images.
 
 Minimal usage is as follows:
 
-    jobs:
-      build:
-        runs-on: ubuntu-latest
-        steps:
-        - uses: actions/checkout@v2
-        - uses: pguyot/arm-runner-action@v2
-          with:
-            commands: |
-                commands to run tests
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: pguyot/arm-runner-action@v2
+      with:
+        commands: |
+            commands to run tests
+```
 
 Typical usage to upload an image as an artifact:
 
-    jobs:
-      build:
-        runs-on: ubuntu-latest
-        steps:
-        - uses: actions/checkout@v2
-        - uses: pguyot/arm-runner-action@v2
-          id: build_image
-          with:
-            base_image: raspios_lite:2022-01-28
-            commands: |
-                commands to build image
-        - name: Compress the release image
-          if: github.ref == 'refs/heads/releng' || startsWith(github.ref, 'refs/tags/')
-          run: |
-            mv ${{ steps.build_image.outputs.image }} my-release-image.img
-            xz -0 -T 0 -v my-release-image.img
-        - name: Upload release image
-          uses: actions/upload-artifact@v2
-          if: github.ref == 'refs/heads/releng' || startsWith(github.ref, 'refs/tags/')
-          with:
-            name: Release image
-            path: my-release-image.img.xz
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: pguyot/arm-runner-action@v2
+      id: build_image
+      with:
+        base_image: raspios_lite:2022-04-04
+        commands: |
+            commands to build image
+    - name: Compress the release image
+      if: github.ref == 'refs/heads/releng' || startsWith(github.ref, 'refs/tags/')
+      run: |
+        mv ${{ steps.build_image.outputs.image }} my-release-image.img
+        xz -0 -T 0 -v my-release-image.img
+    - name: Upload release image
+      uses: actions/upload-artifact@v2
+      if: github.ref == 'refs/heads/releng' || startsWith(github.ref, 'refs/tags/')
+      with:
+        name: Release image
+        path: my-release-image.img.xz
+```
 
 Several scenarios are actually implemented as [tests](/.github/workflows).
+
+### Host and guest OS
+
+The action has been tested with `ubuntu-latest` (currently equivalent to
+`ubuntu-20.04`) and `ubuntu-22.04`. It requires a Linux kernel that is
+compatible enough with the guest system as it uses qemu userland emulation. It
+relies on binfmt.
 
 ### Commands
 
@@ -80,8 +91,10 @@ The following values are allowed:
 - `raspios_lite:2021-05-07`
 - `raspios_lite:2021-10-30`
 - `raspios_lite:2022-01-28`
+- `raspios_lite:2022-04-04`
 - `raspios_lite:latest` (armhf build, *default*)
 - `raspios_lite_arm64:2022-01-28` (arm64)
+- `raspios_lite_arm64:2022-04-04` (arm64)
 - `raspios_lite_arm64:latest` (arm64)
 - `dietpi:rpi_armv6_bullseye`
 - `dietpi:rpi_armv7_bullseye`
@@ -133,7 +146,7 @@ or 64 bits binaries) depend on the image. See _32 and 64 bits_ below.
 
 Source paths(s) inside the image to copy outside after the commands have
 executed. Relative to the `/<repository_name>` directory or the directory
-defined with `copy_repolity_path`. Globs are allowed. To copy multiple paths,
+defined with `copy_repository_path`. Globs are allowed. To copy multiple paths,
 provide a list of paths, separated by semicolons. Default is not to copy.
 
 #### `copy_artifact_dest`
@@ -190,12 +203,34 @@ image compression more efficient. Default is to optimize image.
 Use `systemd-nspawn` instead of chroot to run commands. Default is to use
 chroot.
 
+#### `systemd_nspawn_options`
+
+Additional options passed to `systemd-nspawn`. For example, `-E CI=${CI}` to pass
+CI environment variable. See [systemd-nspawn(1)](https://manpages.ubuntu.com/manpages/focal/man1/systemd-nspawn.1.html).
+
+#### `rootpartition`
+
+Index (starting with 1) of the root partition. Default is 2, which is suitable
+for Raspberry Pi. NVIDIA Jetson images require 1. This is the partition that is
+resized with `image_additional_mb` option.
+
+#### `bootpartition`
+
+Index (starting with 1) of the boot partition which gets mounted at /boot.
+Default is 1, which is suitable for Raspberry Pi. If the value is empty,
+the partition is not mounted.
+
 #### `shell`
 
 Path to shell or shell name to run the commands in. Defaults to /bin/sh.
 If missing, it will be installed. See `shell_package`.
 If defined as basename filename, it will be used as long as the shell binary
 exists under PATH after the package is installed.
+
+Parameters can be passed to the shell, e.g.:
+```yaml
+shell: /bin/bash -eo pipefail
+```
 
 #### `shell_package`
 
@@ -208,7 +243,8 @@ For example, to use `ksh93` as shell, set `shell` to `ksh93` and
 #### `exit_on_fail`
 
 Exit immediately if a command exits with a non-zero status. Default is to exit.
-Set to `no` or `false` to disable exiting on command failure.
+Set to `no` or `false` to disable exiting on command failure. This only works
+with `sh`, `bash` and `ksh` shells.
 
 #### `debug`
 
@@ -252,36 +288,38 @@ base image should match.
 The following matrix will build on armv6l, armv7l and aarch64 using the latest
 RaspberryPi OS images.
 
-    name: Test architecture matrix
-    on: [push, pull_request, workflow_dispatch]
-    jobs:
-      build:
-        runs-on: ubuntu-latest
-        strategy:
-          matrix:
-            arch: [armv6l, armv7l, aarch64]
-            include:
-            - arch: armv6l
-              cpu: arm1176
-              base_image: raspios_lite:latest
-              cpu_info: raspberrypi_zero_w
-            - arch: armv7l
-              cpu: cortex-a7
-              base_image: raspios_lite:latest
-              cpu_info: raspberrypi_3b
-            - arch: aarch64
-              cpu: cortex-a53
-              base_image: raspios_lite_arm64:latest
-              cpu_info: raspberrypi_zero2_w_arm64_w
-        steps:
-        - uses: pguyot/arm-runner-action@v2.1-dev
-          with:
-            base_image: ${{ matrix.base_image }}
-            cpu: ${{ matrix.cpu }}
-            cpu_info: ${{ matrix.cpu_info }}
-            commands: |
-                test `uname -m` = ${{ matrix.arch }}
-                grep Model /proc/cpuinfo
+```yaml
+name: Test architecture matrix
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [armv6l, armv7l, aarch64]
+        include:
+        - arch: armv6l
+          cpu: arm1176
+          base_image: raspios_lite:latest
+          cpu_info: raspberrypi_zero_w
+        - arch: armv7l
+          cpu: cortex-a7
+          base_image: raspios_lite:latest
+          cpu_info: raspberrypi_3b
+        - arch: aarch64
+          cpu: cortex-a53
+          base_image: raspios_lite_arm64:latest
+          cpu_info: raspberrypi_zero2_w_arm64_w
+    steps:
+    - uses: pguyot/arm-runner-action@v2
+      with:
+        base_image: ${{ matrix.base_image }}
+        cpu: ${{ matrix.cpu }}
+        cpu_info: ${{ matrix.cpu_info }}
+        commands: |
+            test `uname -m` = ${{ matrix.arch }}
+            grep Model /proc/cpuinfo
+```
 
 Internally, the `cpu` value is embedded in a wrapper for `qemu-arm-static` and
 `qemu-aarch64-static`. The actual qemu invoked depends on executables within
