@@ -62,7 +62,6 @@ case $1 in
     ;;
     *)
         skip_wget=1
-        mv $1 ./
     ;;
 esac
 
@@ -72,6 +71,8 @@ mkdir -p ${tempdir}
 cd ${tempdir}
 if [ $skip_wget -eq 0 ]; then
     wget --trust-server-names --content-disposition -q ${url}
+else
+    mv $1 ./
 fi
 case `echo *` in
     *.zip)
